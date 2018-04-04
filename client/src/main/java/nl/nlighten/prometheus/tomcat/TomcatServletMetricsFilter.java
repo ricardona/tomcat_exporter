@@ -62,7 +62,7 @@ public class TomcatServletMetricsFilter implements Filter {
             Histogram.Builder servletLatencyBuilder = Histogram.build()
                     .name("servlet_request_seconds")
                     .help("The time taken fulfilling servlet requests")
-                    .labelNames("context", "method");
+                    .labelNames("context", "uri", "query", "method");
 
             if ((filterConfig.getInitParameter(BUCKET_CONFIG_PARAM) != null) && (!filterConfig.getInitParameter(BUCKET_CONFIG_PARAM).isEmpty())) {
                 String[] bucketParams = filterConfig.getInitParameter(BUCKET_CONFIG_PARAM).split(",");
@@ -87,7 +87,7 @@ public class TomcatServletMetricsFilter implements Filter {
             Gauge.Builder servletStatusCodesBuilder = Gauge.build()
                     .name("servlet_response_status_total")
                     .help("Number of requests for given context and status code.")
-                    .labelNames("context", "status");
+                    .labelNames("context", "uri", "query", "status");
 
             servletStatusCodes = servletStatusCodesBuilder.register();
 
@@ -105,11 +105,13 @@ public class TomcatServletMetricsFilter implements Filter {
 
         if (!request.isAsyncStarted()) {
             String context = getContext(request);
+            String uri = getURI(request);
+            String query = getQuery(request);
 
             servletConcurrentRequest.labels(context).inc();
 
             Histogram.Timer timer = servletLatency
-                    .labels(context, request.getMethod())
+                    .labels(context, uri, query, request.getMethod())
                     .startTimer();
 
             try {
@@ -117,7 +119,7 @@ public class TomcatServletMetricsFilter implements Filter {
             } finally {
                 timer.observeDuration();
                 servletConcurrentRequest.labels(context).dec();
-                servletStatusCodes.labels(context, Integer.toString(getStatus((HttpServletResponse) servletResponse))).inc();
+                servletStatusCodes.labels(context, uri, query, Integer.toString(getStatus((HttpServletResponse) servletResponse))).inc();
             }
         } else {
             filterChain.doFilter(servletRequest, servletResponse);
@@ -133,10 +135,26 @@ public class TomcatServletMetricsFilter implements Filter {
     }
 
     private String getContext(HttpServletRequest request) {
-        if (request.getContextPath() != null && !request.getContextPath().isEmpty()) {
+        if (request.getContextPath() != null && !request.getContextPath().isEmpty()) {            
             return request.getContextPath();
         } else {
             return "/";
+        }
+    }
+
+    private String getURI(HttpServletRequest request) {
+        if (request.getRequestURI() != null && !request.getRequestURI().isEmpty()) {            
+            return request.getRequestURI();
+        } else {
+            return "";
+        }
+    }
+
+    private String getQuery(HttpServletRequest request) {
+        if (request.getQueryString() != null && !request.getQueryString().isEmpty()) {            
+            return request.getQueryString();
+        } else {
+            return "";
         }
     }
 
