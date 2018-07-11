@@ -9,6 +9,11 @@ import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.exceptions.JWTDecodeException;
+import com.auth0.jwt.interfaces.DecodedJWT;
+
 import java.io.IOException;
 
 /**
@@ -49,12 +54,16 @@ import java.io.IOException;
  *  </pre>
  */
 public class TomcatServletMetricsFilter implements Filter {
-    private static final String BUCKET_CONFIG_PARAM = "buckets";
+	private static final String BUCKET_CONFIG_PARAM = "buckets";
     private static Histogram servletLatency;
     private static Gauge servletConcurrentRequest;
     private static Gauge servletStatusCodes;
+    private static Gauge servletUserRequest;
 
     private static int UNDEFINED_HTTP_STATUS = 999;
+    private static final String AUTH_HEADER = "Authorization";
+    private static final String TOKEN_USER_KEY = "userid";
+    private static final String ANONYMOUS_USER = "Anonymous";
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
@@ -91,8 +100,16 @@ public class TomcatServletMetricsFilter implements Filter {
 
             servletStatusCodes = servletStatusCodesBuilder.register();
 
+            Gauge.Builder servletUserRequestBuilder = Gauge.build()
+                    .name("servlet_user_request_total")
+                    .help("Number of requests for given user.")
+                    .labelNames("context", "uri", "user", "status", "client_ip");
+
+            servletUserRequest = servletUserRequestBuilder.register();
         }
     }
+
+
 
     @Override
     public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
@@ -107,6 +124,9 @@ public class TomcatServletMetricsFilter implements Filter {
             String context = getContext(request);
             String uri = getURI(request);
             String query = getQuery(request);
+            String user = getUser(request);
+            String status = Integer.toString(getStatus((HttpServletResponse) servletResponse));
+            String clientIPAddress = getClientIPAddress(request);
 
             servletConcurrentRequest.labels(context).inc();
 
@@ -119,14 +139,63 @@ public class TomcatServletMetricsFilter implements Filter {
             } finally {
                 timer.observeDuration();
                 servletConcurrentRequest.labels(context).dec();
-                servletStatusCodes.labels(context, uri, query, Integer.toString(getStatus((HttpServletResponse) servletResponse))).inc();
+
+				servletStatusCodes.labels(context, uri, query, status).inc();
+                servletUserRequest.labels(context, uri, user, status, clientIPAddress).inc();
             }
         } else {
             filterChain.doFilter(servletRequest, servletResponse);
         }
     }
 
-    private int getStatus(HttpServletResponse response) {
+
+    /**
+     * Get user real IP behind reverse proxy
+     * 
+     * Behind a reverse proxy, the user IP we get is often the reverse proxy IP itself. 
+     * But for obvious reasons it’s important to have access to the user real ip address.
+     *  
+     * We need to tell the reverse proxy to pass information to the backend nginx server.
+     * We can add to the nginx thoses lines as a global configuration or per location.
+     * 
+     *   proxy_set_header X-Real-IP $remote_addr;
+     *   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+     *   proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
+     */
+	private String getClientIPAddress(HttpServletRequest request) {
+        String clientIPAddress = request.getHeader("X-REAL-IP");
+
+            if (clientIPAddress == null) {
+              clientIPAddress = request.getHeader("X-FORWARDED-FOR");
+            }
+
+            if (clientIPAddress == null) {
+                clientIPAddress = request.getRemoteAddr();
+            }
+
+        return clientIPAddress;
+	}
+
+    private String getUserFromJwt(String token){
+        try {
+            DecodedJWT jwt = JWT.decode(token);
+            return jwt.getClaim(TOKEN_USER_KEY).asString();
+        } catch (JWTDecodeException exception){
+            return ANONYMOUS_USER;
+        }
+    }
+
+    private String getUser(HttpServletRequest request) {
+        String header = request.getHeader(AUTH_HEADER);
+		if (header != null && !header.isEmpty()) {
+            String userFromJwt = getUserFromJwt(header);
+			return userFromJwt;
+        } else {
+            return ANONYMOUS_USER;
+        }
+	}
+
+	private int getStatus(HttpServletResponse response) {
         try {
             return response.getStatus();
         } catch (Exception ex) {
@@ -135,7 +204,7 @@ public class TomcatServletMetricsFilter implements Filter {
     }
 
     private String getContext(HttpServletRequest request) {
-        if (request.getContextPath() != null && !request.getContextPath().isEmpty()) {            
+        if (request.getContextPath() != null && !request.getContextPath().isEmpty()) {
             return request.getContextPath();
         } else {
             return "/";
@@ -143,7 +212,7 @@ public class TomcatServletMetricsFilter implements Filter {
     }
 
     private String getURI(HttpServletRequest request) {
-        if (request.getRequestURI() != null && !request.getRequestURI().isEmpty()) {            
+        if (request.getRequestURI() != null && !request.getRequestURI().isEmpty()) {
             return request.getRequestURI();
         } else {
             return "";
@@ -151,7 +220,7 @@ public class TomcatServletMetricsFilter implements Filter {
     }
 
     private String getQuery(HttpServletRequest request) {
-        if (request.getQueryString() != null && !request.getQueryString().isEmpty()) {            
+        if (request.getQueryString() != null && !request.getQueryString().isEmpty()) {
             return request.getQueryString();
         } else {
             return "";

@@ -11,7 +11,9 @@ import io.prometheus.client.hotspot.DefaultExports;
 @WebServlet("/")
 public class TomcatMetricsServlet extends MetricsServlet {
 
-    @Override
+    private static final long serialVersionUID = 1L;
+
+	@Override
     public void init(ServletConfig config) {
         DefaultExports.initialize();
         new TomcatGenericExports(false).register();
