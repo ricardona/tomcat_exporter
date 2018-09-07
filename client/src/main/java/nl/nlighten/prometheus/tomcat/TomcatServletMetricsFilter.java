@@ -103,7 +103,7 @@ public class TomcatServletMetricsFilter implements Filter {
             Gauge.Builder servletUserRequestBuilder = Gauge.build()
                     .name("servlet_user_request_total")
                     .help("Number of requests for given user.")
-                    .labelNames("context", "uri", "user", "status", "client_ip");
+                    .labelNames("context", "uri", "user", "status");
 
             servletUserRequest = servletUserRequestBuilder.register();
         }
@@ -119,9 +119,9 @@ public class TomcatServletMetricsFilter implements Filter {
         }
 
         HttpServletRequest request = (HttpServletRequest) servletRequest;
+        String context = getContext(request);
 
-        if (!request.isAsyncStarted()) {
-            String context = getContext(request);
+        if (!request.isAsyncStarted() && context.startsWith("/openintl")) {            
             String uri = getURI(request);
             String query = getQuery(request);
             String user = getUser(request);
@@ -141,7 +141,7 @@ public class TomcatServletMetricsFilter implements Filter {
                 servletConcurrentRequest.labels(context).dec();
 
 				servletStatusCodes.labels(context, uri, query, status).inc();
-                servletUserRequest.labels(context, uri, user, status, clientIPAddress).inc();
+                servletUserRequest.labels(context, uri, user, status).inc();
             }
         } else {
             filterChain.doFilter(servletRequest, servletResponse);
